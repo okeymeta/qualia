@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 const cargoBin = join(process.env.USERPROFILE ?? "", ".cargo", "bin");
 const env = {
@@ -13,9 +14,14 @@ const forwardedArgs =
     ? process.argv.slice(2)
     : process.argv.slice(1);
 
-const child = spawn("tauri", forwardedArgs, {
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const cliEntrypoint = join(scriptDir, "..", "node_modules", "@tauri-apps", "cli", "tauri.js");
+const cwd = process.cwd().startsWith("\\\\?\\") ? process.cwd().slice(4) : process.cwd();
+
+const child = spawn(process.execPath, [cliEntrypoint, ...forwardedArgs], {
   stdio: "inherit",
-  shell: true,
+  shell: false,
+  cwd,
   env,
 });
 

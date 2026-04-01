@@ -1,8 +1,16 @@
+import { useEffect, useState } from "react";
 import { Dashboard } from "./components/Dashboard";
+import { SplashScreen } from "./components/SplashScreen";
 
 function App() {
   const convexUrl = import.meta.env.VITE_CONVEX_URL;
   const operatorEmail = import.meta.env.VITE_OPERATOR_EMAIL ?? "operator@qualia.work";
+  const [showSplash, setShowSplash] = useState(true);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setShowSplash(false), 2200);
+    return () => window.clearTimeout(timeout);
+  }, []);
 
   if (!convexUrl) {
     return (
@@ -20,7 +28,14 @@ function App() {
     );
   }
 
-  return <Dashboard operatorEmail={operatorEmail} />;
+  return (
+    <>
+      {showSplash ? <SplashScreen progressLabel="Linking secure operator workspace" /> : null}
+      <div className={showSplash ? "qualia-app qualia-app--hidden" : "qualia-app qualia-app--visible"}>
+        <Dashboard operatorEmail={operatorEmail} />
+      </div>
+    </>
+  );
 }
 
 export default App;
