@@ -38,3 +38,15 @@ The app is currently configured to look for releases at:
 - `https://github.com/okeymeta/qualia/releases/latest/download/latest.json`
 
 That means remote updates can be shipped through GitHub Releases without running a separate update website, as long as each release publishes the signed updater artifacts and `latest.json`.
+
+## GitHub Release Secrets
+
+To ship signed desktop updates from GitHub Actions, add these repository secrets:
+
+- `TAURI_SIGNING_PRIVATE_KEY`
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+- `VITE_CONVEX_URL`
+- `CONVEX_DEPLOYMENT`
+- `CONVEX_DEPLOY_KEY`
+
+The release workflow lives at [`.github/workflows/release.yml`](C:\Users\USER\qualia\.github\workflows\release.yml) and publishes signed Windows installers plus `latest.json` for the built-in updater.
