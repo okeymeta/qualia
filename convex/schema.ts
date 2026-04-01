@@ -13,6 +13,9 @@ export default defineSchema({
     tier: v.union(v.literal("Probation"), v.literal("Analyst"), v.literal("Senior")),
     isAdmin: v.boolean(),
     countryCode: v.string(),
+    paySchedule: v.literal("monthly"),
+    monthlyPayCents: v.number(),
+    nextPayrollAt: v.optional(v.number()),
     employmentStatus: v.union(
       v.literal("applicant"),
       v.literal("under_review"),
@@ -134,6 +137,7 @@ export default defineSchema({
     aiReason: v.string(),
     fraudRiskScore: v.number(),
     fraudFlags: v.array(v.string()),
+    documentCount: v.number(),
     status: v.union(
       v.literal("submitted"),
       v.literal("approved"),
@@ -154,4 +158,24 @@ export default defineSchema({
     resolvedAt: v.optional(v.number()),
     resolutionNote: v.optional(v.string()),
   }).index("by_user", ["userId", "submittedAt"]),
+
+  applicationDocuments: defineTable({
+    userId: v.id("users"),
+    applicationId: v.optional(v.id("applications")),
+    kind: v.union(
+      v.literal("government_id"),
+      v.literal("proof_of_address"),
+      v.literal("resume"),
+      v.literal("certificate"),
+    ),
+    storageId: v.id("_storage"),
+    fileName: v.string(),
+    contentType: v.string(),
+    status: v.union(v.literal("pending"), v.literal("approved"), v.literal("rejected")),
+    uploadedAt: v.number(),
+    reviewedAt: v.optional(v.number()),
+    reviewNote: v.optional(v.string()),
+  })
+    .index("by_user", ["userId", "uploadedAt"])
+    .index("by_application", ["applicationId", "uploadedAt"]),
 });

@@ -8,7 +8,12 @@ const env = {
   PATH: `${cargoBin};${process.env.PATH ?? ""}`,
 };
 
-const child = spawn("tauri", process.argv.slice(2), {
+const forwardedArgs =
+  process.argv[1] && process.argv[1].endsWith(".mjs")
+    ? process.argv.slice(2)
+    : process.argv.slice(1);
+
+const child = spawn("tauri", forwardedArgs, {
   stdio: "inherit",
   shell: true,
   env,

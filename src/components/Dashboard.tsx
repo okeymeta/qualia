@@ -68,6 +68,14 @@ type AppealRecord = {
   status: string;
 };
 
+type ApplicantDocument = {
+  _id: string;
+  kind: string;
+  fileName: string;
+  status: string;
+  url?: string | null;
+};
+
 const shellMetrics = [
   { label: "Precision", value: "99.14%" },
   { label: "Queue Pressure", value: "31 OPEN" },
@@ -80,6 +88,32 @@ const auditFallback = [
   "[14:11] REVIEW WINDOW REFRESHED",
   "[14:14] STREAM_04 NORMALIZED",
 ];
+
+const iconMap = {
+  work: (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6">
+      <path d="M4 7h16v12H4z" />
+      <path d="M9 7V5h6v2" />
+      <path d="M4 12h16" />
+    </svg>
+  ),
+  shield: (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6">
+      <path d="M12 3l7 3v6c0 4.5-2.6 7.6-7 9-4.4-1.4-7-4.5-7-9V6l7-3z" />
+    </svg>
+  ),
+  file: (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6">
+      <path d="M7 3h7l5 5v13H7z" />
+      <path d="M14 3v5h5" />
+    </svg>
+  ),
+  pulse: (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6">
+      <path d="M3 12h4l2-4 4 8 2-4h6" />
+    </svg>
+  ),
+};
 
 function formatCurrency(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -105,6 +139,11 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
   const [search, setSearch] = useState("");
   const [countryFilter, setCountryFilter] = useState("NG");
   const [appealMessage, setAppealMessage] = useState("");
+  const [selectedDocs, setSelectedDocs] = useState<Record<string, File | null>>({
+    government_id: null,
+    proof_of_address: null,
+    resume: null,
+  });
   const [application, setApplication] = useState({
     fullName: "",
     phone: "",
@@ -144,6 +183,8 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
   const adminUsers = useQuery(api.users.listUsers, { adminEmail: operatorEmail });
   const fraudQueue = useQuery(api.admin.fraudQueue, { email: operatorEmail });
   const appealsQueue = useQuery(api.users.appealsQueue, { adminEmail: operatorEmail });
+  const applicantDocuments = useQuery(api.files.applicantDocuments, { email: operatorEmail });
+  const adminDocumentQueue = useQuery(api.files.adminDocumentQueue, { adminEmail: operatorEmail });
 
   const ensureUser = useMutation(api.users.ensureUser);
   const acceptTerms = useMutation(api.users.acceptTerms);
@@ -151,6 +192,9 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
   const banUser = useMutation(api.users.banUser);
   const reviewAppeal = useMutation(api.users.reviewAppeal);
   const submitAppeal = useMutation(api.users.submitAppeal);
+  const generateApplicantUploadUrl = useMutation(api.files.generateApplicantUploadUrl);
+  const saveApplicantDocument = useMutation(api.files.saveApplicantDocument);
+  const reviewApplicantDocument = useMutation(api.files.reviewApplicantDocument);
   const startShift = useMutation(api.sessions.startShift);
   const stopShift = useMutation(api.sessions.stopShift);
   const approveTask = useMutation(api.tasks.approveTask);
@@ -285,6 +329,29 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
         ipAddress = undefined;
       }
 
+      const uploadedStorageIds: string[] = [];
+      for (const [kind, file] of Object.entries(selectedDocs)) {
+        if (!file) continue;
+        const uploadUrl = await generateApplicantUploadUrl({ email: operatorEmail });
+        const uploadResponse = await fetch(uploadUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": file.type,
+          },
+          body: file,
+        });
+
+        const uploadPayload = await uploadResponse.json();
+        uploadedStorageIds.push(uploadPayload.storageId);
+        await saveApplicantDocument({
+          email: operatorEmail,
+          kind: kind as "government_id" | "proof_of_address" | "resume" | "certificate",
+          storageId: uploadPayload.storageId,
+          fileName: file.name,
+          contentType: file.type || "application/octet-stream",
+        });
+      }
+
       await evaluateApplication({
         email: operatorEmail,
         fullName: application.fullName,
@@ -300,6 +367,7 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
         lastIpRegion: application.countryCode,
         proxyDetected: false,
         vpnDetected: false,
+        documentCount: uploadedStorageIds.length,
         testAnswers: [
           {
             prompt: "How do you verify a suspicious record with conflicting fields?",
@@ -699,6 +767,68 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
                       </div>
 
                       <div className="space-y-2 border border-[var(--line)] p-3">
+                        <div className="flex items-center gap-3">
+                          <span className="text-[var(--bone)]">{iconMap.file}</span>
+                          <p className="text-[10px] uppercase tracking-[0.32em] text-[var(--muted)]">Document Review</p>
+                        </div>
+                        {(adminDocumentQueue ?? []).slice(0, 6).map((doc: ApplicantDocument) => (
+                          <div key={doc._id} className="grid gap-2 border border-[var(--line)] px-3 py-3">
+                            <div className="flex items-center justify-between text-sm">
+                              <span>{doc.fileName}</span>
+                              <span>{doc.status}</span>
+                            </div>
+                            <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">{doc.kind}</div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                type="button"
+                                disabled={busy || doc.status === "approved"}
+                                onClick={() =>
+                                  void (async () => {
+                                    setBusy(true);
+                                    try {
+                                      await reviewApplicantDocument({
+                                        adminEmail: operatorEmail,
+                                        documentId: doc._id as never,
+                                        status: "approved",
+                                        reviewNote: "Document accepted after manual review.",
+                                      });
+                                    } finally {
+                                      setBusy(false);
+                                    }
+                                  })()
+                                }
+                                className="border border-[var(--bone)] px-3 py-2 text-[11px] uppercase tracking-[0.24em] transition hover:bg-[var(--bone)] hover:text-[var(--ink)]"
+                              >
+                                Approve
+                              </button>
+                              <button
+                                type="button"
+                                disabled={busy || doc.status === "rejected"}
+                                onClick={() =>
+                                  void (async () => {
+                                    setBusy(true);
+                                    try {
+                                      await reviewApplicantDocument({
+                                        adminEmail: operatorEmail,
+                                        documentId: doc._id as never,
+                                        status: "rejected",
+                                        reviewNote: "Document failed identity review.",
+                                      });
+                                    } finally {
+                                      setBusy(false);
+                                    }
+                                  })()
+                                }
+                                className="border border-[var(--line)] px-3 py-2 text-[11px] uppercase tracking-[0.24em] text-[var(--muted)] transition hover:border-[var(--bone)] hover:text-[var(--bone)]"
+                              >
+                                Reject
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="space-y-2 border border-[var(--line)] p-3">
                         <p className="text-[10px] uppercase tracking-[0.32em] text-[var(--muted)]">Fraud Queue</p>
                         {(fraudQueue ?? []).slice(0, 6).map((user: UserRecord) => (
                           <div key={user._id} className="grid gap-2 border border-[var(--line)] px-3 py-3">
@@ -838,6 +968,20 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
 
             <div className="mt-6 grid gap-6 lg:grid-cols-2">
               <div className="space-y-3">
+                <div className="grid gap-px bg-[var(--line)] sm:grid-cols-3">
+                  {[
+                    { label: "Identity", body: "Verified operator record", icon: iconMap.file },
+                    { label: "Assessment", body: "Structured qualification screen", icon: iconMap.work },
+                    { label: "Risk", body: "Device and network checks", icon: iconMap.shield },
+                  ].map(({ label, body, icon }) => (
+                    <div key={label} className="bg-[var(--surface)] px-4 py-4">
+                      <div className="mb-3 text-[var(--bone)]">{icon}</div>
+                      <p className="text-[11px] uppercase tracking-[0.28em] text-[var(--muted)]">{label}</p>
+                      <p className="mt-2 text-sm text-[var(--soft)]">{body}</p>
+                    </div>
+                  ))}
+                </div>
+
                 {[
                   ["Full Name", "fullName"],
                   ["Phone", "phone"],
@@ -878,6 +1022,50 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
                     className="min-h-32 w-full bg-transparent px-3 py-3 text-sm outline-none"
                   />
                 </label>
+
+                <div className="border border-[var(--line)] bg-[var(--surface)] p-4">
+                  <div className="mb-3 flex items-center gap-3">
+                    <span className="text-[var(--bone)]">{iconMap.file}</span>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-[0.28em] text-[var(--muted)]">Identity Documents</p>
+                      <p className="text-sm text-[var(--soft)]">Upload at least two files for employment review.</p>
+                    </div>
+                  </div>
+                  <div className="grid gap-3">
+                    {[
+                      ["government_id", "Government ID"],
+                      ["proof_of_address", "Proof of Address"],
+                      ["resume", "Resume / CV"],
+                    ].map(([kind, label]) => (
+                      <label key={kind} className="block border border-[var(--line)] px-3 py-3">
+                        <span className="block text-[10px] uppercase tracking-[0.24em] text-[var(--muted)]">{label}</span>
+                        <input
+                          type="file"
+                          className="mt-3 block w-full text-sm"
+                          onChange={(event) =>
+                            setSelectedDocs((current) => ({
+                              ...current,
+                              [kind]: event.currentTarget.files?.[0] ?? null,
+                            }))
+                          }
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  {applicantDocuments && applicantDocuments.length > 0 ? (
+                    <div className="mt-4 grid gap-2">
+                      {applicantDocuments.map((doc: ApplicantDocument) => (
+                        <div key={doc._id} className="flex items-center justify-between border border-[var(--line)] px-3 py-3 text-sm">
+                          <div>
+                            <p>{doc.fileName}</p>
+                            <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">{doc.kind}</p>
+                          </div>
+                          <span className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">{doc.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               </div>
 
               <div className="space-y-3">
@@ -913,7 +1101,7 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
                 ))}
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={busy || Object.values(selectedDocs).filter(Boolean).length < 2}
                   onClick={() => void handleApplicationSubmit()}
                   className="w-full border border-[var(--bone)] px-4 py-4 text-left text-xs uppercase tracking-[0.26em] transition hover:bg-[var(--bone)] hover:text-[var(--ink)]"
                 >

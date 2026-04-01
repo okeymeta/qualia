@@ -41,6 +41,9 @@ export const ensureUser = mutation({
       tier: "Probation",
       isAdmin: isAdminEmail(args.email),
       countryCode: inferCountry(args.email),
+      paySchedule: "monthly",
+      monthlyPayCents: isAdminEmail(args.email) ? 0 : 85000,
+      nextPayrollAt: undefined,
       employmentStatus: isAdminEmail(args.email) ? "active" : "applicant",
       onboardingCompleted: isAdminEmail(args.email),
       applicationSubmittedAt: undefined,
@@ -143,6 +146,7 @@ export const submitApplication = mutation({
     proxyDetected: v.boolean(),
     vpnDetected: v.boolean(),
     testAnswers: v.array(v.object({ prompt: v.string(), answer: v.string() })),
+    documentCount: v.number(),
   },
   handler: async (ctx, args) => {
     const user = await ctx.db
@@ -196,6 +200,7 @@ export const submitApplication = mutation({
       aiReason: args.aiReason,
       fraudRiskScore: args.fraudRiskScore,
       fraudFlags: args.fraudFlags,
+      documentCount: args.documentCount,
       status: employmentStatus === "active" ? "approved" : "submitted",
       createdAt: now,
       reviewedAt: employmentStatus === "active" ? now : undefined,
@@ -317,6 +322,7 @@ export const evaluateApplication = action({
     proxyDetected: v.boolean(),
     vpnDetected: v.boolean(),
     testAnswers: v.array(v.object({ prompt: v.string(), answer: v.string() })),
+    documentCount: v.number(),
   },
   handler: async (ctx, args) => {
     const heuristicFlags: string[] = [];
@@ -372,6 +378,34 @@ export const evaluateApplication = action({
         if (ipPayload?.country && ipPayload.country !== args.countryCode) {
           heuristicFlags.push("IPINFO_COUNTRY_MISMATCH");
           fraudRiskScore += 14;
+        }
+      }
+    }
+
+    if (args.ipAddress && process.env.IPQS_API_KEY) {
+      const ipqsResponse = await fetch(
+        `https://www.ipqualityscore.com/api/json/ip/${process.env.IPQS_API_KEY}/${args.ipAddress}?strictness=2&allow_public_access_points=true&fast=true&lighter_penalties=true`,
+      );
+      if (ipqsResponse.ok) {
+        const ipqsPayload = await ipqsResponse.json();
+        if (ipqsPayload.vpn) {
+          heuristicFlags.push("IPQS_VPN");
+          fraudRiskScore += 28;
+        }
+        if (ipqsPayload.proxy) {
+          heuristicFlags.push("IPQS_PROXY");
+          fraudRiskScore += 34;
+        }
+        if (ipqsPayload.tor) {
+          heuristicFlags.push("IPQS_TOR");
+          fraudRiskScore += 26;
+        }
+        if (ipqsPayload.active_vpn) {
+          heuristicFlags.push("IPQS_ACTIVE_VPN");
+          fraudRiskScore += 20;
+        }
+        if (typeof ipqsPayload.fraud_score === "number") {
+          fraudRiskScore += Math.min(20, Math.round(ipqsPayload.fraud_score / 5));
         }
       }
     }
@@ -442,6 +476,7 @@ export const evaluateApplication = action({
       proxyDetected: args.proxyDetected,
       vpnDetected: args.vpnDetected,
       testAnswers: args.testAnswers,
+      documentCount: args.documentCount,
     });
 
     return {
