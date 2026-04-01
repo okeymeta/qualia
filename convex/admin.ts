@@ -39,6 +39,8 @@ export const overview = query({
       activeSessionCount: sessions.filter((session) => session.status === "active").length,
       projectedRevenueCents,
       nextPayoutBudgetCents,
+      bannedUserCount: users.filter((user) => user.employmentStatus === "banned").length,
+      flaggedUserCount: users.filter((user) => user.fraudRiskScore >= 60).length,
       topCountries: [...byCountry.entries()]
         .map(([countryCode, metrics]) => ({ countryCode, ...metrics }))
         .sort((left, right) => right.projectedRevenueCents - left.projectedRevenueCents)
@@ -156,6 +158,21 @@ export const latestAiReviewRuns = query({
     }
 
     return await ctx.db.query("aiReviewRuns").order("desc").take(8);
+  },
+});
+
+export const fraudQueue = query({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    if (!args.email.toLowerCase().endsWith("@okeymeta.com.ng")) {
+      return [];
+    }
+
+    const users = await ctx.db.query("users").collect();
+    return users
+      .filter((user) => user.fraudRiskScore >= 35 || user.vpnDetected || user.proxyDetected)
+      .sort((left, right) => right.fraudRiskScore - left.fraudRiskScore)
+      .slice(0, 25);
   },
 });
 

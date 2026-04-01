@@ -18,6 +18,9 @@ export const startShift = mutation({
   args: { email: v.string() },
   handler: async (ctx, args) => {
     const user = await getUserByEmail(ctx, args.email);
+    if (!user.isAdmin && user.employmentStatus !== "active") {
+      throw new Error("Only active operators can start shifts.");
+    }
     const now = Date.now();
 
     const activeSessions = await ctx.db

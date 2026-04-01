@@ -19,6 +19,9 @@ export const reviewQueue = query({
   args: { email: v.string(), countryCode: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const user = await findUser(ctx, args.email);
+    if (!user.isAdmin && user.employmentStatus !== "active") {
+      return [];
+    }
     if (user.isAdmin) {
       const pending = await ctx.db
         .query("tasks")

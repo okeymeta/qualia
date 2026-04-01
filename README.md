@@ -22,6 +22,7 @@ The deployed Convex backend expects these environment variables:
 - `GROQ_API_KEY`
 - `GROQ_MODEL`
 - `SYSTEM_ADMIN_EMAIL`
+- `IPINFO_TOKEN`
 
 ## Signed Auto Updates
 

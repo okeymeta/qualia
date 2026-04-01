@@ -47,6 +47,27 @@ type AiRun = {
   status: string;
 };
 
+type UserRecord = {
+  _id: string;
+  fullName: string;
+  email: string;
+  countryCode: string;
+  employmentStatus: string;
+  fraudRiskScore: number;
+  fraudFlags: string[];
+  latestAppealStatus?: string;
+  banReason?: string;
+  qualificationScore: number;
+  aiDecisionReason?: string;
+};
+
+type AppealRecord = {
+  _id: string;
+  userId: string;
+  message: string;
+  status: string;
+};
+
 const shellMetrics = [
   { label: "Precision", value: "99.14%" },
   { label: "Queue Pressure", value: "31 OPEN" },
@@ -83,6 +104,20 @@ function formatDuration(totalSeconds: number) {
 export function Dashboard({ operatorEmail }: DashboardProps) {
   const [search, setSearch] = useState("");
   const [countryFilter, setCountryFilter] = useState("NG");
+  const [appealMessage, setAppealMessage] = useState("");
+  const [application, setApplication] = useState({
+    fullName: "",
+    phone: "",
+    countryCode: "NG",
+    countryName: "Nigeria",
+    city: "Lagos",
+    workType: "Data Verification Analyst",
+    experienceSummary: "",
+    portfolioLink: "",
+    q1: "",
+    q2: "",
+    q3: "",
+  });
   const [runtime, setRuntime] = useState<RuntimeSnapshot>({
     active: false,
     operatorId: null,
@@ -106,10 +141,16 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
   const auditLog = useQuery(api.sessions.auditFeed, { email: operatorEmail });
   const adminOverview = useQuery(api.admin.overview, { email: operatorEmail });
   const latestAiRuns = useQuery(api.admin.latestAiReviewRuns, { email: operatorEmail });
+  const adminUsers = useQuery(api.users.listUsers, { adminEmail: operatorEmail });
+  const fraudQueue = useQuery(api.admin.fraudQueue, { email: operatorEmail });
+  const appealsQueue = useQuery(api.users.appealsQueue, { adminEmail: operatorEmail });
 
   const ensureUser = useMutation(api.users.ensureUser);
   const acceptTerms = useMutation(api.users.acceptTerms);
   const grantResourceConsent = useMutation(api.users.grantResourceConsent);
+  const banUser = useMutation(api.users.banUser);
+  const reviewAppeal = useMutation(api.users.reviewAppeal);
+  const submitAppeal = useMutation(api.users.submitAppeal);
   const startShift = useMutation(api.sessions.startShift);
   const stopShift = useMutation(api.sessions.stopShift);
   const approveTask = useMutation(api.tasks.approveTask);
@@ -118,6 +159,7 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
   const upsertCountryPolicy = useMutation(api.admin.upsertCountryPolicy);
   const generateTaskBatch = useAction(api.tasks.generateTaskBatch);
   const runCountryAiReview = useAction(api.tasks.runCountryAiReview);
+  const evaluateApplication = useAction(api.users.evaluateApplication);
 
   useEffect(() => {
     void ensureUser({ email: operatorEmail });
@@ -158,6 +200,9 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
   }, [deferredSearch, reviewQueue]);
 
   const isAdmin = viewer?.isAdmin ?? isAdminEmail(operatorEmail);
+  const isActiveOperator = viewer?.employmentStatus === "active" || isAdmin;
+  const isBanned = viewer?.employmentStatus === "banned";
+  const needsApplication = viewer ? !viewer.onboardingCompleted || viewer.employmentStatus === "applicant" : false;
 
   const handleStartShift = async () => {
     if (!viewer) return;
@@ -226,6 +271,55 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
     }
   };
 
+  const handleApplicationSubmit = async () => {
+    setBusy(true);
+    try {
+      let ipAddress: string | undefined;
+      try {
+        const response = await fetch("https://api.ipify.org?format=json");
+        if (response.ok) {
+          const payload = await response.json();
+          ipAddress = payload.ip;
+        }
+      } catch {
+        ipAddress = undefined;
+      }
+
+      await evaluateApplication({
+        email: operatorEmail,
+        fullName: application.fullName,
+        phone: application.phone,
+        countryCode: application.countryCode,
+        countryName: application.countryName,
+        city: application.city,
+        workType: application.workType,
+        experienceSummary: application.experienceSummary,
+        portfolioLink: application.portfolioLink || undefined,
+        ipAddress,
+        deviceFingerprint: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
+        lastIpRegion: application.countryCode,
+        proxyDetected: false,
+        vpnDetected: false,
+        testAnswers: [
+          {
+            prompt: "How do you verify a suspicious record with conflicting fields?",
+            answer: application.q1,
+          },
+          {
+            prompt: "What should happen when a confidence score is high but a supporting document disagrees?",
+            answer: application.q2,
+          },
+          {
+            prompt: "How would you preserve speed without sacrificing auditability?",
+            answer: application.q3,
+          },
+        ],
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[var(--ink)] text-[var(--bone)]">
       <div className="mx-auto grid min-h-screen max-w-[1600px] grid-cols-1 gap-px bg-[var(--line)] lg:grid-cols-[248px_minmax(0,1fr)_360px]">
@@ -252,7 +346,7 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
               <button
                 type="button"
                 onClick={runtime.active ? handleStopShift : handleStartShift}
-                disabled={busy || !viewer}
+                disabled={busy || !viewer || !isActiveOperator}
                 className="w-full border border-[var(--bone)] px-3 py-3 text-left text-xs uppercase tracking-[0.26em] transition hover:bg-[var(--bone)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:border-[var(--line)] disabled:text-[var(--muted)]"
               >
                 {runtime.active ? "End Shift" : "Start Shift"}
@@ -465,7 +559,7 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
                         <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">Domain Gate</p>
                       </div>
 
-                      <div className="grid gap-px bg-[var(--line)] sm:grid-cols-3">
+                      <div className="grid gap-px bg-[var(--line)] sm:grid-cols-5">
                         <div className="bg-[var(--surface)] px-3 py-4">
                           <p className="text-[10px] uppercase tracking-[0.32em] text-[var(--muted)]">Users</p>
                           <p className="mt-2 text-2xl tracking-[-0.06em]">{adminOverview?.userCount ?? 0}</p>
@@ -481,6 +575,14 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
                           <p className="mt-2 text-2xl tracking-[-0.06em]">
                             {formatCurrency(adminOverview?.nextPayoutBudgetCents ?? 0)}
                           </p>
+                        </div>
+                        <div className="bg-[var(--surface)] px-3 py-4">
+                          <p className="text-[10px] uppercase tracking-[0.32em] text-[var(--muted)]">Flagged</p>
+                          <p className="mt-2 text-2xl tracking-[-0.06em]">{adminOverview?.flaggedUserCount ?? 0}</p>
+                        </div>
+                        <div className="bg-[var(--surface)] px-3 py-4">
+                          <p className="text-[10px] uppercase tracking-[0.32em] text-[var(--muted)]">Banned</p>
+                          <p className="mt-2 text-2xl tracking-[-0.06em]">{adminOverview?.bannedUserCount ?? 0}</p>
                         </div>
                       </div>
 
@@ -574,6 +676,120 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
                           </div>
                         ))}
                       </div>
+
+                      <div className="space-y-2 border border-[var(--line)] p-3">
+                        <p className="text-[10px] uppercase tracking-[0.32em] text-[var(--muted)]">Applicants</p>
+                        {(adminUsers ?? [])
+                          .filter((user: UserRecord) => user.employmentStatus !== "active" || user.fraudRiskScore > 0)
+                          .slice(0, 8)
+                          .map((user: UserRecord) => (
+                            <div key={user._id} className="grid gap-2 border border-[var(--line)] px-3 py-3">
+                              <div className="flex items-center justify-between text-sm">
+                                <span>{user.fullName}</span>
+                                <span>{user.qualificationScore}</span>
+                              </div>
+                              <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">
+                                {user.employmentStatus} / {user.countryCode}
+                              </div>
+                              <div className="text-xs text-[var(--soft)]">
+                                {user.aiDecisionReason ?? "Awaiting AI qualification output."}
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+
+                      <div className="space-y-2 border border-[var(--line)] p-3">
+                        <p className="text-[10px] uppercase tracking-[0.32em] text-[var(--muted)]">Fraud Queue</p>
+                        {(fraudQueue ?? []).slice(0, 6).map((user: UserRecord) => (
+                          <div key={user._id} className="grid gap-2 border border-[var(--line)] px-3 py-3">
+                            <div className="flex items-center justify-between text-sm">
+                              <span>{user.fullName}</span>
+                              <span>{user.fraudRiskScore}</span>
+                            </div>
+                            <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">
+                              {user.countryCode} / {user.employmentStatus}
+                            </div>
+                            <div className="text-xs text-[var(--soft)]">{user.fraudFlags.join(" | ") || "Clean"}</div>
+                            <button
+                              type="button"
+                              disabled={busy || user.employmentStatus === "banned"}
+                              onClick={() =>
+                                void (async () => {
+                                  setBusy(true);
+                                  try {
+                                    await banUser({
+                                      adminEmail: operatorEmail,
+                                      userId: user._id as never,
+                                      reason: "Risk policy violation: proxy, VPN, or integrity anomaly.",
+                                    });
+                                  } finally {
+                                    setBusy(false);
+                                  }
+                                })()
+                              }
+                              className="border border-[var(--line)] px-3 py-2 text-left text-[11px] uppercase tracking-[0.24em] text-[var(--muted)] transition hover:border-[var(--bone)] hover:text-[var(--bone)]"
+                            >
+                              Ban User
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="space-y-2 border border-[var(--line)] p-3">
+                        <p className="text-[10px] uppercase tracking-[0.32em] text-[var(--muted)]">Appeals</p>
+                        {(appealsQueue ?? []).slice(0, 6).map((appeal: AppealRecord) => (
+                          <div key={appeal._id} className="grid gap-2 border border-[var(--line)] px-3 py-3">
+                            <div className="text-xs text-[var(--soft)]">{appeal.message}</div>
+                            <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">{appeal.status}</div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                type="button"
+                                disabled={busy || appeal.status !== "pending"}
+                                onClick={() =>
+                                  void (async () => {
+                                    setBusy(true);
+                                    try {
+                                      await reviewAppeal({
+                                        adminEmail: operatorEmail,
+                                        appealId: appeal._id as never,
+                                        status: "accepted",
+                                        resolutionNote: "Appeal accepted after manual review.",
+                                      });
+                                    } finally {
+                                      setBusy(false);
+                                    }
+                                  })()
+                                }
+                                className="border border-[var(--bone)] px-3 py-2 text-[11px] uppercase tracking-[0.24em] transition hover:bg-[var(--bone)] hover:text-[var(--ink)]"
+                              >
+                                Accept
+                              </button>
+                              <button
+                                type="button"
+                                disabled={busy || appeal.status !== "pending"}
+                                onClick={() =>
+                                  void (async () => {
+                                    setBusy(true);
+                                    try {
+                                      await reviewAppeal({
+                                        adminEmail: operatorEmail,
+                                        appealId: appeal._id as never,
+                                        status: "rejected",
+                                        resolutionNote: "Appeal rejected after policy review.",
+                                      });
+                                    } finally {
+                                      setBusy(false);
+                                    }
+                                  })()
+                                }
+                                className="border border-[var(--line)] px-3 py-2 text-[11px] uppercase tracking-[0.24em] text-[var(--muted)] transition hover:border-[var(--bone)] hover:text-[var(--bone)]"
+                              >
+                                Reject
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ) : null}
                 </div>
@@ -609,6 +825,142 @@ export function Dashboard({ operatorEmail }: DashboardProps) {
           </div>
         </aside>
       </div>
+
+      {viewer && needsApplication ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/80 p-8">
+          <div className="max-h-[90vh] w-full max-w-5xl overflow-auto border border-[var(--line)] bg-[var(--panel)] p-8">
+            <p className="text-[10px] uppercase tracking-[0.32em] text-[var(--muted)]">Application Intake</p>
+            <h2 className="mt-3 text-3xl font-semibold tracking-[-0.08em]">Apply To Join Qualia</h2>
+            <p className="mt-3 max-w-3xl text-sm leading-6 text-[var(--soft)]">
+              Submit your identity, work context, and qualification answers. A screening model scores operational judgment,
+              while the risk engine checks for proxy, VPN, integrity, and device anomalies before access is granted.
+            </p>
+
+            <div className="mt-6 grid gap-6 lg:grid-cols-2">
+              <div className="space-y-3">
+                {[
+                  ["Full Name", "fullName"],
+                  ["Phone", "phone"],
+                  ["Country Code", "countryCode"],
+                  ["Country Name", "countryName"],
+                  ["City", "city"],
+                  ["Work Type", "workType"],
+                  ["Portfolio Link", "portfolioLink"],
+                ].map(([label, key]) => (
+                  <label key={key} className="block border border-[var(--line)] bg-[var(--surface)]">
+                    <span className="block px-3 py-2 text-[10px] uppercase tracking-[0.28em] text-[var(--muted)]">
+                      {label}
+                    </span>
+                    <input
+                      value={application[key as keyof typeof application]}
+                      onChange={(event) =>
+                        setApplication((current) => ({
+                          ...current,
+                          [key]: event.currentTarget.value,
+                        }))
+                      }
+                      className="w-full bg-transparent px-3 py-3 text-sm outline-none"
+                    />
+                  </label>
+                ))}
+                <label className="block border border-[var(--line)] bg-[var(--surface)]">
+                  <span className="block px-3 py-2 text-[10px] uppercase tracking-[0.28em] text-[var(--muted)]">
+                    Experience Summary
+                  </span>
+                  <textarea
+                    value={application.experienceSummary}
+                    onChange={(event) =>
+                      setApplication((current) => ({
+                        ...current,
+                        experienceSummary: event.currentTarget.value,
+                      }))
+                    }
+                    className="min-h-32 w-full bg-transparent px-3 py-3 text-sm outline-none"
+                  />
+                </label>
+              </div>
+
+              <div className="space-y-3">
+                {[
+                  [
+                    "How do you verify a suspicious record with conflicting fields?",
+                    "q1",
+                  ],
+                  [
+                    "What should happen when model confidence is high but source evidence conflicts?",
+                    "q2",
+                  ],
+                  [
+                    "How do you preserve speed while keeping a clear audit trail?",
+                    "q3",
+                  ],
+                ].map(([prompt, key]) => (
+                  <label key={key} className="block border border-[var(--line)] bg-[var(--surface)]">
+                    <span className="block px-3 py-2 text-[10px] uppercase tracking-[0.28em] text-[var(--muted)]">
+                      {prompt}
+                    </span>
+                    <textarea
+                      value={application[key as keyof typeof application]}
+                      onChange={(event) =>
+                        setApplication((current) => ({
+                          ...current,
+                          [key]: event.currentTarget.value,
+                        }))
+                      }
+                      className="min-h-32 w-full bg-transparent px-3 py-3 text-sm outline-none"
+                    />
+                  </label>
+                ))}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void handleApplicationSubmit()}
+                  className="w-full border border-[var(--bone)] px-4 py-4 text-left text-xs uppercase tracking-[0.26em] transition hover:bg-[var(--bone)] hover:text-[var(--ink)]"
+                >
+                  Submit Application For AI Qualification
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {viewer && isBanned ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/85 p-8">
+          <div className="max-w-2xl border border-[var(--line)] bg-[var(--panel)] p-8">
+            <p className="text-[10px] uppercase tracking-[0.32em] text-[var(--muted)]">Access Restricted</p>
+            <h2 className="mt-3 text-3xl font-semibold tracking-[-0.08em]">Operator Access Suspended</h2>
+            <p className="mt-4 text-sm leading-6 text-[var(--soft)]">
+              Your account is currently restricted from receiving work. Reason: {viewer.banReason ?? "Policy review"}.
+              You may submit one appeal for manual review by the OkeyMeta operations team.
+            </p>
+            <textarea
+              value={appealMessage}
+              onChange={(event) => setAppealMessage(event.currentTarget.value)}
+              className="mt-5 min-h-40 w-full border border-[var(--line)] bg-[var(--surface)] px-3 py-3 text-sm outline-none"
+              placeholder="Explain why the restriction should be reversed and include any supporting context."
+            />
+            <button
+              type="button"
+              disabled={busy || appealMessage.trim().length < 40}
+              onClick={() =>
+                void (async () => {
+                  setBusy(true);
+                  try {
+                    await submitAppeal({ email: operatorEmail, message: appealMessage });
+                    setAppealMessage("");
+                  } finally {
+                    setBusy(false);
+                  }
+                })()
+              }
+              className="mt-4 w-full border border-[var(--bone)] px-4 py-4 text-left text-xs uppercase tracking-[0.26em] transition hover:bg-[var(--bone)] hover:text-[var(--ink)]"
+            >
+              Submit Appeal
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {viewer && !viewer.termsAcceptedAt ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-8">
